@@ -38,4 +38,4 @@ The following table explains the barcoding scheme. Sense and anti-sense are not 
 | ODN-3 -    | AGAGTAGA | AGGCAGAA |
 
 
-The GUIDE-Seq pipeline was cloned from the corresponding Github repo [Github GUIDEseq repo](https://github.com/aryeelab/guideseq).
+The GUIDE-Seq pipeline was cloned from the corresponding Github repo [Github GUIDEseq repo](https://github.com/tsailabSJ/guideseq).
