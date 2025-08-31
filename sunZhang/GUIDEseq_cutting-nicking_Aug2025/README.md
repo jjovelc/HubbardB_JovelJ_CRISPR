@@ -11,11 +11,9 @@ This project contains **164 samples** with comprehensive barcode and index infor
 - **Concentrations:** 0.5 pmol, 5 pmol, 10 pmol, 100 pmol
 
 ## Analysis Protocol
-For detailed analysis instructions and protocols, see: **[NGS Analysis Protocol](nicking_lib_NGS_analysis_protocol_2024Dec_inline.html)**
+For detailed analysis instructions and protocols, download: **[NGS Analysis Protocol](https://github.com/jjovelc/HubbardB_JovelJ_CRISPR/raw/main/sunZhang/GUIDEseq_cutting-nicking_Aug2025/nicking_lib_NGS_analysis_protocol_2024Dec_inline.html)**
 
-**Note:** This HTML file contains comprehensive guidance on how to perform the analysis for the GUIDE-seq cutting and nickase library experiments. To view it properly:
-1. **Download the file** from GitHub and open it in your web browser, or
-2. **View the raw HTML** by clicking the link above and then clicking "Raw" in GitHub
+**Note:** This will automatically download the HTML file. Open it in your web browser to view the complete analysis protocol with proper formatting.
 
 ## Overview
 This repository contains analysis scripts and documentation for GUIDE-seq experiments investigating Cas9 cutting efficiency, ODN tag incorporation, and Cas9 nickase high-throughput in vitro library analysis.
