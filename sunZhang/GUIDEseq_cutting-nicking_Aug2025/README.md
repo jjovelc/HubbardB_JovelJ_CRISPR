@@ -15,7 +15,7 @@ For detailed analysis instructions and protocols, download: **[NGS Analysis Prot
 
 **Note:** This will download a ZIP file containing the HTML protocol. After downloading:
 1. **Extract the ZIP file** to get the HTML file
-2. **Open the extracted .html file** in your web browser for proper formatting
+2. **Open the extracted .html file**, just double-click to open in your web browser for proper formatting
 
 ## Overview
 This repository contains analysis scripts and documentation for GUIDE-seq experiments investigating Cas9 cutting efficiency, ODN tag incorporation, and Cas9 nickase high-throughput in vitro library analysis.
