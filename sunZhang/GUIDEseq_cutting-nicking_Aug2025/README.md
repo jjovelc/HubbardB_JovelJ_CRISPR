@@ -11,7 +11,9 @@ This project contains **164 samples** with comprehensive barcode and index infor
 - **Concentrations:** 0.5 pmol, 5 pmol, 10 pmol, 100 pmol
 
 ## Analysis Protocol
-For detailed analysis instructions and protocols, see: **[NGS Analysis Protocol](nicking_lib_NGS_analysis_protocol_2024Dec_inline.html)**
+For detailed analysis instructions and protocols, see: <a href="nicking_lib_NGS_analysis_protocol_2024Dec_inline.html" download>
+  NGS Analysis Protocol
+</a>
 
 **Note:** To view this protocol properly:
 1. **Right-click the link above** and select "Save link as..." or "Download linked file"
