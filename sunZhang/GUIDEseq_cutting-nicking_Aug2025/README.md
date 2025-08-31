@@ -10,6 +10,11 @@ This project contains **164 samples** with comprehensive barcode and index infor
 - **XNA types:** RNA, FANA, LNA, DNA
 - **Concentrations:** 0.5 pmol, 5 pmol, 10 pmol, 100 pmol
 
+## Analysis Protocol
+For detailed analysis instructions and protocols, see: **[NGS Analysis Protocol](nicking_lib_NGS_analysis_protocol_2024Dec_inline.html)**
+
+This HTML file contains comprehensive guidance on how to perform the analysis for the GUIDE-seq cutting and nickase library experiments.
+
 ## Overview
 This repository contains analysis scripts and documentation for GUIDE-seq experiments investigating Cas9 cutting efficiency, ODN tag incorporation, and Cas9 nickase high-throughput in vitro library analysis.
 
