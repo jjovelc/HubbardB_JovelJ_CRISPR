@@ -11,7 +11,7 @@ This project contains **164 samples** with comprehensive barcode and index infor
 - **Concentrations:** 0.5 pmol, 5 pmol, 10 pmol, 100 pmol
 
 ## Analysis Protocol
-For detailed analysis instructions and protocols, download: **[NGS Analysis Protocol](https://github.com/jjovelc/HubbardB_JovelJ_CRISPR/raw/main/sunZhang/GUIDEseq_cutting-nicking_Aug2025/nicking_lib_NGS_analysis_protocol_2024Dec_inline.zip)**
+For detailed analysis instructions and protocols, download: **[NGS Analysis Protocol](https://github.com/jjovelc/HubbardB_JovelJ_CRISPR/raw/main/sunZhang/GUIDEseq_cutting-nicking_Aug2025/nicking_lib_NGS_analysis_protocol_2024Dec_inline_with_constants.zip)**
 
 **Note:** This will download a ZIP file containing the HTML protocol. After downloading:
 1. **Extract the ZIP file** to get the HTML file
