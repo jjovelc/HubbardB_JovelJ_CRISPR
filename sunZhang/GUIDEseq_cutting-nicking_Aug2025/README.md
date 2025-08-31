@@ -1,7 +1,7 @@
 # GUIDE-seq Cutting and Nicking Analysis - August 2025
 
 ## Sample Metadata
-This project contains **164 samples** with comprehensive barcode and index information. For the complete sample metadata table including all barcodes, I5 sequences, and I7 sequences, see: **[Sample Metadata](sample_metadata.md)**
+This project contains **164 samples** with comprehensive barcode and index information. For the complete sample metadata table including all barcodes, I5 sequences, and I7 sequences, see: **[Sample Metadata](joined_samples_with_barcodes.md)**
 
 **Sample Summary:**
 - **Control samples:** Untreated, ODN only, Cas9 only
