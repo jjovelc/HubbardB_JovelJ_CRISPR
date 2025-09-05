@@ -1,4 +1,4 @@
-# CARBON-G1: Merged-read extraction and nicking tolerance quantification
+# Merged-read extraction and nicking tolerance quantification
 
 This guide documents the Group 1 workflow for analyzing Cas9 nickase data:
 
