@@ -24,8 +24,8 @@ R2_GLOB="*_R2*.fastq.gz"
 JOINED_CSV="joined_samples_with_barcodes.csv"  # <-- put it next to this sbatch file or give full path
 
 # Constants (R1 orientation)
-LEFT_CONSTANT="FILL_ME_LEFT_CONSTANT"      # <-- EDIT (5' constant)
-RIGHT_CONSTANT="FILL_ME_RIGHT_CONSTANT"    # <-- EDIT (3' constant)
+LEFT_CONSTANT="ATGGTGAGCAAGGGCGAGG"        # <-- EDIT (5' constant)
+RIGHT_CONSTANT="GCATGGACGAGCTGTACAAGTAA"   # <-- EDIT (3' constant)
 ERROR_RATE="0.10"                          # cutadapt -e
 MIN_OVERLAP="16"                           # cutadapt -O
 
