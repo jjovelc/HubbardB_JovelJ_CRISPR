@@ -4,4 +4,4 @@ Each project has its own directory and its own README file where details about t
 
 ## Group Members and Their Directories:
 
-- [Sun Zhang](sunZhang/)
+- [Shun Zhang](shunZhang/)
