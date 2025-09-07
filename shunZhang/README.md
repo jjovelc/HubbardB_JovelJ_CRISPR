@@ -1,4 +1,4 @@
-# Sun Zhang's page
+# Shun Zhang's page
 
 Sun Zhang has been working of GUIDEseq.
 
