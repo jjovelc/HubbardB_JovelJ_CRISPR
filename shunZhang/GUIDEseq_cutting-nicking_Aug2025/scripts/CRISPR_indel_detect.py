@@ -1,369 +1,506 @@
 #!/usr/bin/env python3
 """
-CRISPR_indel_detect.py - Fixed Version with Error Handling
-Detects insertions and deletions at CRISPR cut sites from merged FASTQ reads
+CRISPR_indel_detect.py
+Detect insertions and deletions at CRISPR cut sites from merged FASTQ reads.
+
+Key fixes vs. your previous version:
+- Proper bidirectional guide matching with correct cut-site logic
+- True deletion detection (right flank can start before left flank end)
+- Actual use of --min-quality on FASTQ qualities (PHRED+33)
+- Clear denominators and true editing efficiency
+- Optional ODN-aware insertion tagging
 """
 
-import re
-import gzip
 import os
 import sys
-from collections import defaultdict, Counter
+import re
+import gzip
 import argparse
+from collections import Counter
 
-def parse_reference_sequences(ref_file):
-    """Parse reference sequences without BioPython dependency"""
-    references = {}
-    
-    print(f"Reading reference file: {ref_file}")
-    
-    if not os.path.exists(ref_file):
-        print(f"ERROR: Reference file not found: {ref_file}")
+# ----------------------------
+# Utilities
+# ----------------------------
+
+def reverse_complement(seq: str) -> str:
+    tbl = str.maketrans('ACGTNacgtn', 'TGCANtgcan')
+    return seq.translate(tbl)[::-1]
+
+def mean_phred33(q: str) -> float:
+    # PHRED+33
+    return sum(ord(c) - 33 for c in q) / max(1, len(q))
+
+def find_all(haystack: str, needle: str, start: int = 0):
+    """Yield all positions of needle in haystack from start (inclusive)."""
+    i = haystack.find(needle, start)
+    while i != -1:
+        yield i
+        i = haystack.find(needle, i + 1)
+
+# ----------------------------
+# Reference & cut-site logic
+# ----------------------------
+
+GUIDES_20NT = {
+    # Use the canonical 20-nt protospacers (no PAM)
+    # The user-supplied guides had an N before PAM; we trim to 20 nt.
+    "AAVS1": "GTCCCTAGTGGCCCCACTGT",
+    "CEP290": "GGAGTCACATGGGAGTCACA",
+    "TRAC":   "GCTGGTACACGGCAGGGTCA",
+}
+
+def parse_fasta(path: str):
+    if not os.path.exists(path):
+        print(f"ERROR: Reference file not found: {path}")
         sys.exit(1)
-    
-    try:
-        with open(ref_file, 'r') as f:
-            content = f.read().strip()
-        
-        if not content.startswith('>'):
-            print(f"ERROR: Reference file should be in FASTA format (start with '>')")
-            sys.exit(1)
-        
-        # Parse FASTA manually
-        sequences = {}
-        current_seq = ""
-        current_id = ""
-        
-        for line in content.split('\n'):
+
+    with open(path, "r") as fh:
+        name, seq = None, []
+        for line in fh:
             line = line.strip()
-            if line.startswith('>'):
-                if current_id and current_seq:
-                    sequences[current_id] = current_seq.upper()
-                current_id = line[1:].split()[0]  # Take first word after >
-                current_seq = ""
-            elif line:
-                current_seq += line
-        
-        # Don't forget the last sequence
-        if current_id and current_seq:
-            sequences[current_id] = current_seq.upper()
-        
-        print(f"Found {len(sequences)} reference sequences")
-        
-        # For each sequence, find the cut site (assume middle for now)
-        for seq_id, sequence in sequences.items():
-            # Based on your original data, cut sites should be around position 100
-            # Let's try to find the actual cut site by looking for guide sequences
-            cut_pos = len(sequence) // 2  # Default to middle
-            
-            # Your guide sequences (without NGG PAM)
-            guide_seqs = {
-                'AAVS1': 'GTCCCTAGTGGCCCCACTGT',
-                'CEP290': 'CCCTGTGACTCCCATGTGACTCC',  # This is the reverse complement
-                'TRAC': 'CCCTGACCCTGCCGTGTACCAGC'   # This is the reverse complement
-            }
-            
-            # Try to find guide sequence in reference to locate cut site
-            for guide_name, guide_seq in guide_seqs.items():
-                if guide_name.upper() in seq_id.upper():
-                    pos = sequence.find(guide_seq)
-                    if pos != -1:
-                        # Cut is 3bp upstream of PAM, which is after the 20bp guide
-                        cut_pos = pos + 17  # Cut between positions 17 and 18 of guide
-                        print(f"Found {guide_name} guide in {seq_id} at position {pos}, cut at {cut_pos}")
-                        break
-                    else:
-                        # Try reverse complement
-                        rc_guide = reverse_complement(guide_seq)
-                        pos = sequence.find(rc_guide)
-                        if pos != -1:
-                            cut_pos = pos + 17
-                            print(f"Found {guide_name} guide (RC) in {seq_id} at position {pos}, cut at {cut_pos}")
-                            break
-            
-            references[seq_id] = {
-                'sequence': sequence,
-                'cut_position': cut_pos,
-                'left_flank': sequence[:cut_pos],
-                'right_flank': sequence[cut_pos:]
-            }
-            
-            print(f"  {seq_id}: {len(sequence)}bp, cut at position {cut_pos}")
-            
-    except Exception as e:
-        print(f"ERROR: Cannot read reference file: {e}")
+            if not line:
+                continue
+            if line.startswith(">"):
+                if name:
+                    yield name, "".join(seq).upper()
+                name = line[1:].split()[0]
+                seq = []
+            else:
+                seq.append(line)
+        if name:
+            yield name, "".join(seq).upper()
+
+def find_cut_position(seq_id: str, seq: str):
+    """
+    Discover the cut site by looking for either the forward guide OR its reverse complement.
+    If forward protospacer is found at index 'pos' (0-based), cut = pos + 17.
+    If reverse protospacer (rc) is found at index 'pos', cut = pos + 3.
+    Fallback: midpoint.
+    Returns: (cut_pos, matched_gene, strand)
+    """
+    # Normalize AASV1 typo if present
+    uc_id = seq_id.upper().replace("AASV1", "AAVS1")
+
+    for gene, guide in GUIDES_20NT.items():
+        if gene in uc_id:
+            # Try forward
+            pos_f = seq.find(guide)
+            if pos_f != -1:
+                return pos_f + 17, gene, '+'
+            # Try reverse complement
+            rc = reverse_complement(guide)
+            pos_r = seq.find(rc)
+            if pos_r != -1:
+                return pos_r + 3, gene, '-'
+            # Not found; still this gene id matched
+            return len(seq) // 2, gene, '?'
+
+    # Gene name not in header; try all guides anyway
+    for gene, guide in GUIDES_20NT.items():
+        pos_f = seq.find(guide)
+        if pos_f != -1:
+            return pos_f + 17, gene, '+'
+        rc = reverse_complement(guide)
+        pos_r = seq.find(rc)
+        if pos_r != -1:
+            return pos_r + 3, gene, '-'
+
+    # Last resort
+    return len(seq) // 2, "UNKNOWN", '?'
+
+def load_references(ref_fasta_path: str):
+    refs = {}
+    print(f"Reading reference file: {ref_fasta_path}")
+    for sid, sseq in parse_fasta(ref_fasta_path):
+        cut, gene, strand = find_cut_position(sid, sseq)
+        refs[sid] = {
+            "sequence": sseq,
+            "cut_position": cut,
+            "left_flank": sseq[:cut],
+            "right_flank": sseq[cut:],
+            "gene": gene,
+            "strand": strand,
+        }
+        print(f"  {sid}: {len(sseq)} bp | cut @ {cut} | gene={gene} | strand={strand}")
+    if not refs:
+        print("ERROR: No sequences parsed from reference FASTA.")
         sys.exit(1)
-        
-    return references
+    return refs
 
-def reverse_complement(seq):
-    """Return reverse complement of DNA sequence"""
-    complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 'N': 'N'}
-    return ''.join(complement.get(base, base) for base in seq[::-1])
+# ----------------------------
+# Alignment around cut
+# ----------------------------
 
-def find_best_alignment(read_seq, ref_left, ref_right, max_indel_size=100):
+def find_best_alignment(
+    read_seq: str,
+    ref_left: str,
+    ref_right: str,
+    max_indel_size: int = 100,
+    min_flank_match: int = 15,
+    min_score: int = 30,
+):
     """
-    Find best alignment of read to reference, allowing for indels at cut site
+    Align read against reference split at cut:
+      - Match suffix of left_flank and prefix of right_flank
+      - Allow right flank to begin within a window [left_end - max_indel, left_end + max_indel]
+        so that negative deltas (deletions) are discoverable.
+    Returns dict or None.
     """
-    read_seq = read_seq.upper()
-    ref_left = ref_left.upper()
-    ref_right = ref_right.upper()
-    
-    best_alignment = None
+    read = read_seq.upper()
+    L = ref_left.upper()
+    R = ref_right.upper()
+
+    best = None
     best_score = -1
-    
-    min_flank_match = 15  # Minimum bases that must match on each flank
-    
-    # Try different left flank lengths
-    for left_len in range(min_flank_match, min(len(ref_left), len(read_seq) - min_flank_match, 50) + 1):
-        left_ref = ref_left[-left_len:]  # Take last left_len bases from left flank
-        
-        # Find where left flank matches in read
-        left_match_pos = read_seq.find(left_ref)
+
+    # Cap flank scans at 50 nt, but not beyond bounds
+    max_left = min(len(L), len(read) - min_flank_match, 50)
+    if max_left < min_flank_match:
+        return None
+
+    for left_len in range(min_flank_match, max_left + 1):
+        left_ref = L[-left_len:]  # suffix
+        left_match_pos = read.find(left_ref)
         if left_match_pos == -1:
             continue
-            
-        # Position after left match
         left_end = left_match_pos + left_len
-        
-        # Try different right flank lengths
-        for right_len in range(min_flank_match, min(len(ref_right), len(read_seq) - left_end, 50) + 1):
-            right_ref = ref_right[:right_len]  # Take first right_len bases from right flank
-            
-            # Find where right flank should start
-            right_start_pos = read_seq.find(right_ref, left_end)
-            if right_start_pos == -1:
-                continue
-                
-            # Calculate indel
-            expected_right_start = left_end  # For perfect match
-            actual_right_start = right_start_pos
-            indel_size = actual_right_start - expected_right_start
-            
-            if abs(indel_size) > max_indel_size:
-                continue
-                
-            # Calculate alignment score
-            score = left_len + right_len
-            
-            if score > best_score:
-                if indel_size > 0:
-                    # Insertion
-                    indel_seq = read_seq[left_end:right_start_pos]
-                    alignment_type = "insertion"
-                elif indel_size < 0:
-                    # Deletion
-                    indel_seq = ""
-                    alignment_type = "deletion"
-                else:
-                    # Perfect match
-                    indel_seq = ""
-                    alignment_type = "perfect"
-                    
-                best_alignment = {
-                    'type': alignment_type,
-                    'size': abs(indel_size),
-                    'sequence': indel_seq,
-                    'score': score
-                }
-                best_score = score
-    
-    return best_alignment
 
-def analyze_reads(fastq_file, references, min_quality=20, max_indel_size=100):
-    """Analyze FASTQ reads for indels at cut sites"""
-    
+        # Right flank length loop
+        max_right = min(len(R), len(read), 50)
+        if max_right < min_flank_match:
+            continue
+
+        for right_len in range(min_flank_match, max_right + 1):
+            right_ref = R[:right_len]  # prefix
+
+            # Window where right flank can begin (allow overlap for deletions)
+            win_start = max(0, left_end - max_indel_size)
+            win_end   = min(len(read), left_end + max_indel_size)
+
+            for rs in find_all(read, right_ref, start=win_start):
+                if rs > win_end:
+                    break
+
+                delta = rs - left_end  # >0 insertion; <0 deletion; 0 perfect
+                if abs(delta) > max_indel_size:
+                    continue
+
+                score = left_len + right_len
+                if score < min_score:
+                    continue
+
+                if score > best_score:
+                    if delta > 0:
+                        seq_ins = read[left_end:rs]
+                        call = {
+                            "type": "insertion",
+                            "size": delta,
+                            "sequence": seq_ins,
+                            "score": score,
+                            "left_len": left_len,
+                            "right_len": right_len,
+                        }
+                    elif delta < 0:
+                        call = {
+                            "type": "deletion",
+                            "size": -delta,
+                            "sequence": "",
+                            "score": score,
+                            "left_len": left_len,
+                            "right_len": right_len,
+                        }
+                    else:
+                        call = {
+                            "type": "perfect",
+                            "size": 0,
+                            "sequence": "",
+                            "score": score,
+                            "left_len": left_len,
+                            "right_len": right_len,
+                        }
+                    best = call
+                    best_score = score
+
+    return best
+
+# ----------------------------
+# ODN tagging
+# ----------------------------
+
+def contains_odn(insert_seq: str, odn_seq: str, k: int = 20) -> bool:
+    """Return True if a k-mer from ODN (or its RC) occurs in the inserted sequence."""
+    if not odn_seq or not insert_seq:
+        return False
+    odn = odn_seq.upper()
+    rco = reverse_complement(odn)
+    ins = insert_seq.upper()
+
+    if len(odn) < k:
+        k = len(odn)
+    if k <= 0:
+        return False
+
+    for i in range(len(odn) - k + 1):
+        sub = odn[i:i+k]
+        if sub in ins:
+            return True
+    for i in range(len(rco) - k + 1):
+        sub = rco[i:i+k]
+        if sub in ins:
+            return True
+    return False
+
+# ----------------------------
+# Main analysis
+# ----------------------------
+
+def analyze_reads(
+    fastq_file: str,
+    references: dict,
+    min_quality: int = 20,
+    max_indel_size: int = 100,
+    min_flank_match: int = 15,
+    min_score: int = 30,
+    odn_seq: str = "",
+    odn_k: int = 20,
+):
     if not os.path.exists(fastq_file):
         print(f"ERROR: FASTQ file not found: {fastq_file}")
         return {}
-    
-    print(f"File size: {os.path.getsize(fastq_file):,} bytes")
-    
-    results = {}
-    
-    for ref_name, ref_data in references.items():
-        print(f"\nAnalyzing {ref_name}...")
-        
-        indel_counts = Counter()
-        total_reads = 0
-        analyzed_reads = 0
-        
-        try:
-            # Open FASTQ file
-            if fastq_file.endswith('.gz'):
-                file_handle = gzip.open(fastq_file, 'rt')
-            else:
-                file_handle = open(fastq_file, 'r')
-            
-            # Read FASTQ manually (no BioPython dependency)
-            line_count = 0
-            for line in file_handle:
-                line_count += 1
-                
-                # Every 4th line starting from line 2 is a sequence
-                if line_count % 4 == 2:  
-                    total_reads += 1
-                    read_seq = line.strip().upper()
-                    
-                    # Quick pre-filter: check if read contains parts of target region
-                    left_flank = ref_data['left_flank']
-                    right_flank = ref_data['right_flank']
-                    
-                    # Look for partial matches
-                    left_partial = left_flank[-25:] if len(left_flank) >= 25 else left_flank
-                    right_partial = right_flank[:25] if len(right_flank) >= 25 else right_flank
-                    
-                    if left_partial not in read_seq and right_partial not in read_seq:
-                        continue
-                    
-                    analyzed_reads += 1
-                    
-                    # Try forward orientation
-                    alignment = find_best_alignment(read_seq, left_flank, right_flank, max_indel_size)
-                    
-                    # Try reverse complement
-                    if alignment is None or alignment['score'] < 25:
-                        rc_read = reverse_complement(read_seq)
-                        rc_alignment = find_best_alignment(rc_read, left_flank, right_flank, max_indel_size)
-                        if rc_alignment and (alignment is None or rc_alignment['score'] > alignment['score']):
-                            alignment = rc_alignment
-                    
-                    if alignment and alignment['score'] >= 25:  # Minimum score threshold
-                        if alignment['type'] == 'perfect':
-                            indel_counts['perfect_match'] += 1
-                        elif alignment['type'] == 'insertion':
-                            key = f"ins_{alignment['size']}bp"
-                            if alignment['sequence'] and len(alignment['sequence']) <= 20:
-                                key += f"_{alignment['sequence']}"
-                            indel_counts[key] += 1
-                        elif alignment['type'] == 'deletion':
-                            key = f"del_{alignment['size']}bp"
-                            indel_counts[key] += 1
-                    
-                    # Progress update
-                    if total_reads % 50000 == 0:
-                        print(f"  Processed {total_reads:,} reads, analyzed {analyzed_reads:,}")
-                        
-            file_handle.close()
-            
-        except Exception as e:
-            print(f"ERROR: Problem reading FASTQ file: {e}")
-            return {}
-        
-        results[ref_name] = {
-            'total_reads': total_reads,
-            'analyzed_reads': analyzed_reads,
-            'indel_counts': indel_counts
-        }
-        
-        print(f"  Total reads: {total_reads:,}")
-        print(f"  Analyzed reads: {analyzed_reads:,}")
-        print(f"  Reads with events: {sum(indel_counts.values()):,}")
-    
-    return results
 
-def print_results(results):
-    """Print analysis results"""
-    
+    print(f"FASTQ size: {os.path.getsize(fastq_file):,} bytes")
+
+    # Results, per reference
+    results = {
+        ref_name: {
+            "total_reads": 0,
+            "prefilter_hits": 0,   # contains either left OR right 25-mer
+            "both_flanks_hits": 0, # an alignment was found (>= min_flank on both sides)
+            "classified": 0,       # perfect + insertion + deletion
+            "indel_counts": Counter(),
+        }
+        for ref_name in references
+    }
+
+    # FASTQ reader (4-line records)
+    if fastq_file.endswith(".gz"):
+        fh = gzip.open(fastq_file, "rt")
+    else:
+        fh = open(fastq_file, "r")
+
+    try:
+        while True:
+            hdr = fh.readline()
+            if not hdr:
+                break
+            seq = fh.readline().strip()
+            plus = fh.readline()
+            qual = fh.readline().strip()
+
+            # Defensive: malformed FASTQ
+            if not seq or not qual:
+                continue
+
+            # Quality gate
+            if mean_phred33(qual) < min_quality:
+                # Still count as total for every reference
+                for ref_name in results:
+                    results[ref_name]["total_reads"] += 1
+                continue
+
+            # Process for each reference
+            for ref_name, ref in references.items():
+                results[ref_name]["total_reads"] += 1
+
+                L = ref["left_flank"]
+                R = ref["right_flank"]
+
+                left_partial  = L[-25:] if len(L) >= 25 else L
+                right_partial = R[:25]  if len(R) >= 25 else R
+
+                # Prefilter: OR (fast), then real alignment decides
+                if (left_partial and left_partial in seq) or (right_partial and right_partial in seq):
+                    results[ref_name]["prefilter_hits"] += 1
+                else:
+                    continue
+
+                # Try forward read
+                aln_f = find_best_alignment(
+                    seq, L, R, max_indel_size, min_flank_match, min_score
+                )
+                # Try reverse-complement read
+                aln_r = find_best_alignment(
+                    reverse_complement(seq), L, R, max_indel_size, min_flank_match, min_score
+                )
+
+                aln = None
+                if aln_f and aln_r:
+                    aln = aln_f if aln_f["score"] >= aln_r["score"] else aln_r
+                else:
+                    aln = aln_f or aln_r
+
+                if not aln:
+                    continue  # prefilter hit but not both flanks with required score
+
+                results[ref_name]["both_flanks_hits"] += 1
+
+                # Classify event
+                if aln["type"] == "perfect":
+                    results[ref_name]["indel_counts"]["perfect_match"] += 1
+                    results[ref_name]["classified"] += 1
+
+                elif aln["type"] == "deletion":
+                    key = f"del_{aln['size']}bp"
+                    results[ref_name]["indel_counts"][key] += 1
+                    results[ref_name]["classified"] += 1
+
+                elif aln["type"] == "insertion":
+                    ins_seq = aln["sequence"]
+                    key = f"ins_{aln['size']}bp"
+                    # annotate short sequences
+                    if ins_seq and len(ins_seq) <= 20:
+                        key += f"_{ins_seq}"
+
+                    # ODN tagging
+                    if odn_seq and contains_odn(ins_seq, odn_seq, k=odn_k):
+                        key += "_ODN"
+
+                    results[ref_name]["indel_counts"][key] += 1
+                    results[ref_name]["classified"] += 1
+
+        return results
+
+    finally:
+        fh.close()
+
+# ----------------------------
+# Reporting
+# ----------------------------
+
+def print_results(results: dict):
     for ref_name, data in results.items():
-        print(f"\n{'='*60}")
+        total = data["total_reads"]
+        pre  = data["prefilter_hits"]
+        both = data["both_flanks_hits"]
+        cls  = data["classified"]
+        events = sum(data["indel_counts"].values())
+        edits = events - data["indel_counts"].get("perfect_match", 0)
+
+        print("\n" + "="*60)
         print(f"Results for {ref_name}")
-        print(f"{'='*60}")
-        
-        total_reads = data['total_reads']
-        analyzed_reads = data['analyzed_reads']
-        indel_counts = data['indel_counts']
-        
-        print(f"Total reads processed: {total_reads:,}")
-        print(f"Reads analyzed (containing target region): {analyzed_reads:,}")
-        
-        if analyzed_reads > 0:
-            print(f"Analysis coverage: {analyzed_reads/total_reads*100:.2f}%")
-            
-            total_events = sum(indel_counts.values())
-            print(f"Total editing events detected: {total_events:,}")
-            print(f"Editing efficiency: {total_events/analyzed_reads*100:.2f}%")
-            
-            if total_events > 0:
-                print("\nEvent breakdown:")
-                for event_type, count in indel_counts.most_common():
-                    percentage = count/analyzed_reads*100
-                    print(f"  {event_type}: {count:,} ({percentage:.2f}%)")
-            else:
-                print("\nNo editing events detected")
+        print("="*60)
+        print(f"Total reads processed:         {total:,}")
+        print(f"Prefilter hits (≥1 flank):      {pre:,} ({(pre/total*100 if total else 0):.2f}%)")
+        print(f"Both flanks aligned (≥{15}bp): {both:,} ({(both/total*100 if total else 0):.2f}%)")
+        print(f"Classified (events called):     {cls:,} ({(cls/total*100 if total else 0):.2f}%)")
+
+        if cls > 0:
+            true_eff = edits / cls * 100.0
+            print(f"True editing efficiency:        {true_eff:.2f}%  (#edited / classified)")
+            print(f"Total events (incl. perfect):   {events:,}")
+            print("\nEvent breakdown (as % of CLASSIFIED):")
+            for et, c in data["indel_counts"].most_common():
+                print(f"  {et}: {c:,} ({(c/cls*100):.2f}%)")
         else:
-            print("No reads found containing target regions")
+            print("No classifiable events.")
+
+def save_results(results: dict, out_path: str, fastq: str, ref_fa: str, args):
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w") as f:
+        f.write(f"CRISPR Indel Detection Results - Sample: {os.path.basename(out_path).replace('_indels.txt','')}\n")
+        f.write("="*80 + "\n")
+        f.write(f"Input file: {fastq}\n")
+        f.write(f"Reference file: {ref_fa}\n")
+        f.write(f"Min quality: {args.min_quality}\n")
+        f.write(f"Max indel size: {args.max_indel}\n")
+        f.write(f"Min flank match: {args.min_flank}\n")
+        f.write(f"Min score: {args.min_score}\n")
+        if args.odn:
+            f.write(f"ODN sequence: {args.odn} (k={args.odn_k})\n")
+        f.write("\n")
+
+        for ref_name, data in results.items():
+            total = data["total_reads"]
+            pre  = data["prefilter_hits"]
+            both = data["both_flanks_hits"]
+            cls  = data["classified"]
+            events = sum(data["indel_counts"].values())
+            edits  = events - data["indel_counts"].get("perfect_match", 0)
+
+            f.write(f"\n{ref_name}\n")
+            f.write("-"*len(ref_name) + "\n")
+            f.write(f"Total reads:                   {total:,}\n")
+            f.write(f"Prefilter hits (≥1 flank):     {pre:,} ({(pre/total*100 if total else 0):.2f}%)\n")
+            f.write(f"Both flanks aligned:           {both:,} ({(both/total*100 if total else 0):.2f}%)\n")
+            f.write(f"Classified (events called):    {cls:,} ({(cls/total*100 if total else 0):.2f}%)\n")
+
+            if cls > 0:
+                f.write(f"True editing efficiency:       {(edits/cls*100):.2f}%\n")
+
+            f.write("\nEvents:\n")
+            if events > 0:
+                for et, c in data["indel_counts"].most_common():
+                    pct = (c/cls*100) if cls else 0.0
+                    f.write(f"  {et}: {c:,} ({pct:.2f}%)\n")
+            else:
+                f.write("  No editing events detected\n")
+
+    print(f"\nResults saved to: {out_path}")
+
+# ----------------------------
+# CLI
+# ----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description='Detect CRISPR indels from FASTQ reads')
-    parser.add_argument('fastq', help='Input FASTQ file (can be gzipped)')
-    parser.add_argument('reference', help='Reference sequences FASTA file')
-    parser.add_argument('--min-quality', type=int, default=20, help='Minimum average read quality')
-    parser.add_argument('--max-indel', type=int, default=100, help='Maximum indel size to detect')
-    parser.add_argument('--output', help='Output file for results (optional)')
-    
-    args = parser.parse_args()
-    
-    # Get sample name from output file for cleaner logging
-    sample_name = args.output.replace('_indels.txt', '') if args.output else 'Unknown'
-    
-    print(f"\n{'='*80}")
+    p = argparse.ArgumentParser(description="Detect CRISPR indels from merged FASTQ reads")
+    p.add_argument("fastq", help="Input FASTQ (gz or plain)")
+    p.add_argument("reference", help="Reference FASTA (∼200 bp windows)")
+    p.add_argument("--min-quality", type=int, default=20, help="Min mean PHRED quality (default 20)")
+    p.add_argument("--max-indel", type=int, default=100, help="Max indel size to detect (default 100)")
+    p.add_argument("--min-flank", type=int, default=15, help="Min matching bases on EACH flank (default 15)")
+    p.add_argument("--min-score", type=int, default=30, help="Min (left_len + right_len) to accept (default 30)")
+    p.add_argument("--odn", type=str, default="GTTTAATTGAGTTGTCATATGTTAATAACGGTAT",
+                   help="ODN template sequence (default: provided in your doc). Use '' to disable.")
+    p.add_argument("--odn-k", type=int, default=20, help="Substring length to tag ODN insertions (default 20)")
+    p.add_argument("--output", help="Write a human-readable report here")
+    args = p.parse_args()
+
+    print("\n" + "="*80)
+    sample_name = (args.output or os.path.basename(args.fastq)).replace("_indels.txt", "")
     print(f"CRISPR Indel Detection Analysis - Sample: {sample_name}")
-    print(f"{'='*80}")
-    
-    # Parse reference sequences
-    print("Loading reference sequences...")
-    references = parse_reference_sequences(args.reference)
-    
-    # Analyze reads
-    print(f"\nAnalyzing reads from: {args.fastq}")
-    results = analyze_reads(args.fastq, references, args.min_quality, args.max_indel)
-    
+    print("="*80)
+
+    # Load references and compute cut positions
+    refs = load_references(args.reference)
+
+    # Analyze
+    results = analyze_reads(
+        args.fastq,
+        refs,
+        min_quality=args.min_quality,
+        max_indel_size=args.max_indel,
+        min_flank_match=args.min_flank,
+        min_score=args.min_score,
+        odn_seq=args.odn,
+        odn_k=args.odn_k,
+    )
     if not results:
         print("ERROR: No results generated")
         sys.exit(1)
-    
-    # Print results
+
+    # Print to stdout
     print_results(results)
-    
-    # Save results
+
+    # Optional save
     if args.output:
         try:
-            # Create output directory if it doesn't exist
-            os.makedirs(os.path.dirname(args.output), exist_ok=True)
-            
-            with open(args.output, 'w') as f:
-                f.write(f"CRISPR Indel Detection Results - Sample: {sample_name}\n")
-                f.write("=" * 80 + "\n")
-                f.write(f"Input file: {args.fastq}\n")
-                f.write(f"Reference file: {args.reference}\n")
-                f.write(f"Min quality: {args.min_quality}\n")
-                f.write(f"Max indel size: {args.max_indel}\n\n")
-                
-                for ref_name, data in results.items():
-                    f.write(f"\n{ref_name}\n")
-                    f.write("-" * len(ref_name) + "\n")
-                    f.write(f"Total reads: {data['total_reads']:,}\n")
-                    f.write(f"Analyzed reads: {data['analyzed_reads']:,}\n")
-                    total_events = sum(data['indel_counts'].values())
-                    if data['analyzed_reads'] > 0:
-                        f.write(f"Editing efficiency: {total_events/data['analyzed_reads']*100:.2f}%\n")
-                        f.write(f"Coverage: {data['analyzed_reads']/data['total_reads']*100:.2f}%\n")
-                    f.write("\nEvents:\n")
-                    if total_events > 0:
-                        for event_type, count in data['indel_counts'].most_common():
-                            if data['analyzed_reads'] > 0:
-                                percentage = count/data['analyzed_reads']*100
-                                f.write(f"  {event_type}: {count:,} ({percentage:.2f}%)\n")
-                    else:
-                        f.write("  No editing events detected\n")
-            print(f"\nResults saved to: {args.output}")
-            
+            save_results(results, args.output, args.fastq, args.reference, args)
         except Exception as e:
             print(f"ERROR: Cannot write output file: {e}")
-    
-    print(f"\nCompleted analysis for {sample_name}")
-    print("-" * 80)
+
+    print("\nCompleted.")
+    print("-"*80)
 
 if __name__ == "__main__":
     main()
+
