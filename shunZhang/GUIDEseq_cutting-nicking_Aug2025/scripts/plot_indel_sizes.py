@@ -104,8 +104,8 @@ def main():
     ap.add_argument("--xmax", type=int, default=100, help="Half-range of sizes to plot: [-X..+X] (default 100)")
     ap.add_argument("--outdir", default="", help="Output directory (default: alongside input file)")
     ap.add_argument("--normalize", choices=["none","classified","events"], default="none",
-                    help="Normalize bar heights: none=counts, classified=%% of 'Classified (events called)', events=%% of parsed events only (default none)")
-    ap.add_argument("--title", default="", help="Custom plot title")
+                    help="Normalize bar heights: none=counts, classified=% of 'Classified (events called)', events=% of parsed events only (default none)")
+    ap.add_argument("--title", default="", help="Custom plot title (default: input filename without '_indels.txt')")
     ap.add_argument("--basename", default="", help="Base name for output files (PNG/CSV). Default derives from input+target.")
     args = ap.parse_args()
 
@@ -148,17 +148,25 @@ def main():
     # Output paths
     outdir = args.outdir or os.path.dirname(os.path.abspath(args.results_file))
     os.makedirs(outdir, exist_ok=True)
-    base = args.basename or f"{os.path.splitext(os.path.basename(args.results_file))[0]}_{target_name}"
+    # Derive base name from input file and target
+    input_base_full = os.path.basename(args.results_file)
+    if input_base_full.endswith("_indels.txt"):
+        input_base = input_base_full[: -len("_indels.txt")]
+    else:
+        input_base = os.path.splitext(input_base_full)[0]
+    base = args.basename or f"{input_base}_{target_name}"
     png_path = os.path.join(outdir, f"{base}_indel_size_barplot.png")
     csv_path = os.path.join(outdir, f"{base}_indel_size_counts.csv")
 
     # Plot
     plt.figure(figsize=(12, 5))
-    plt.bar(df["size_bp"], df.iloc[:,1])
+    plt.bar(df["size_bp"], df.iloc[:,1])  # default matplotlib color
     # Mark +34 (intact ODN) if within range
     if 34 <= X:
         plt.axvline(34, linestyle='--')
-    ttl = args.title or f"Indel size distribution for {target_name} ({'-X..+X'.replace('X', str(X))})"
+    # Title: default to input filename without "_indels.txt"
+    default_title = input_base
+    ttl = args.title if args.title else default_title
     plt.title(ttl)
     plt.xlabel("Indel size (bp; negative = deletions, positive = insertions)")
     ylabel = f"Read {value_label}"
@@ -166,7 +174,6 @@ def main():
     plt.xlim([-X, X])
     plt.tight_layout()
     plt.savefig(png_path, dpi=150)
-    # No plt.show() by default in CLI
 
     # Save CSV
     df.to_csv(csv_path, index=False)
@@ -176,3 +183,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
