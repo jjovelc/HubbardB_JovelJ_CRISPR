@@ -1,5 +1,8 @@
 # Detecting dsODN Insertions from CRISPR Cuts (Merged PE Libraries)
 
+### NOTE
+Also see the CRISPResso2 report [here](CRISPR_indel_detection.md) where ODN are also reported as indels at position +34.
+
 This document explains the end-to-end procedure to detect dsODN (GUIDE-style) insertion junctions in standard Illumina libraries without UMIs, using:
 
 - A small Python script that builds a compact panel of expected junction sequences for each guide and ODN orientation

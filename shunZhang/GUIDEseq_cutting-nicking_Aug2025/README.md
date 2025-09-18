@@ -1,5 +1,11 @@
 # GUIDE-seq Cutting and Nicking Analysis - August 2025
 
+This project include three parts, which can be summarized as two, since analysis with CRISPResso2 solves the last two points:
+
+1. [Nickase activity](Cas9-nickase.md)
+2. [Cas9-cutting](GUIDE-seq_Cas9-cutting.md)
+3. [Indels detection](CRISPR_indel_detection_with_CRISPResso2.md)
+
 ## Sample Metadata
 This project contains **164 samples** with comprehensive barcode and index information. For the complete sample metadata table including all barcodes, I5 sequences, and I7 sequences, see: **[Sample Metadata](joined_samples_with_barcodes.md)**
 
