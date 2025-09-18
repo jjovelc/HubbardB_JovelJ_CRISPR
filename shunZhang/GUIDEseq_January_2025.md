@@ -1,6 +1,4 @@
-# Shun Zhang's page
-
-Sun Zhang has been working of GUIDEseq.
+# GUIDEseq experiment including genes CEP290, PDCD, HBB (conducted on January 2025)
 
 ## Description of experiment
 
