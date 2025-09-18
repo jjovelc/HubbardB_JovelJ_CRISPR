@@ -1,168 +1,285 @@
 # CRISPR Indel Detection Pipeline
 
+Many approaches were tried. At the end using [CIRSPResso2](https://crispresso2.pinellolab.org/submission) pipeline was satisfactory.
+
+# CRISPResso2 Analysis Procedure Guide
+
 ## Overview
-This pipeline detects insertions and deletions (indels) at CRISPR-Cas9 cut sites from paired-end FASTQ sequencing data. It analyzes merged reads to identify non-homologous end joining (NHEJ) repair outcomes at target loci.
 
-## Experimental Design
+This guide describes the automated analysis procedure for detecting indels in CRISPR experiments using CRISPResso2. The analysis targets three human genes: **AAVS1**, **CEP290**, and **TRAC** using a batch processing script.
 
-### Target genes
-- **AAVS1**, **CEP290**, **TRAC**
+## Prerequisites
 
-### Guide RNAs
-- **AAVS1**: `GTCCCTAGTGGCCCCACTGTNGG`
-- **CEP290**: `GGAGTCACATGGGAGTCACANGG` 
-- **TRAC**: `GCTGGTACACGGCAGGGTCANGG`
+### Software Requirements
+- **CRISPResso2** (version 2.3.3 or higher)
+- **Conda/Mamba** environment manager
+- **Bash** shell environment
 
-### ODN sequence
-`GTTTAATTGAGTTGTCATATGTTAATAACGGTAT`
+### Data Requirements
+- **Merged FASTQ files**: Pre-processed paired-end reads that have been merged into single sequences
+- **Directory structure**: Each sample should be in its own directory with the merged FASTQ file named as `{DIRECTORY_NAME}_merged.fastq.gz`
 
-### Sequencing
-Paired-end reads merged into single FASTQ files
+## Experimental Setup
 
-## Pipeline Components
+### Target Genes and Sequences
 
-### 1. Reference Preparation
+#### 1. AAVS1 (ADENO-ASSOCIATED VIRUS INTEGRATION SITE 1)
+- **Guide RNA**: `GTCCCTAGTGGCCCCACTGT`
+- **Amplicon length**: 463 bp
+- **Function**: Safe harbor locus for gene integration
 
-Reference sequences can be seen [here](genomic_regions.fa)
+#### 2. CEP290 (CENTROSOMAL PROTEIN 290)
+- **Guide RNA**: `GGAGTCACATGGGAGTCACA`  
+- **Amplicon length**: 463 bp
+- **Function**: Centrosomal protein involved in ciliary function
 
+#### 3. TRAC (T-CELL RECEPTOR ALPHA CONSTANT)
+- **Guide RNA**: `GCTGGTACACGGCAGGGTCA`
+- **Amplicon length**: 207 bp
+- **Function**: T-cell receptor constant region
+
+## Analysis Parameters
+
+### Standard Parameters (AAVS1 & CEP290)
 ```bash
-# Remove cut site markers from reference sequences
-sed 's/-//g' genomic_regions.fa > genomic_regions_clean.fa
+--quantification_window_size 20      # Analysis window around cut site
+--exclude_bp_from_left 15           # Exclude 15bp from left end (primers)
+--exclude_bp_from_right 15          # Exclude 15bp from right end (primers)
+--min_frequency_alleles_around_cut_to_plot 0.05  # Show alleles ≥5% frequency
+--plot_histogram_outliers           # Include large indels in plots
 ```
 
-**Reference sequences**: ~200bp genomic regions (100bp flanking each side of cut site)
-- Cut site positioned 3bp upstream of PAM (between positions 17-18 of protospacer)
-- CEP290 and TRAC sequences in reverse complement orientation (genomic strand)
-
-### 2. Indel Detection Algorithm
-
-#### Cut Site Identification
-- **Forward strand**: Cut occurs between bases 17|18 of guide sequence
-- **Algorithm**: Searches for guide sequences within reference to locate precise cut positions
-- **Fallback**: Uses sequence midpoint if guide not found
-
-#### Read Analysis Strategy
-1. **Pre-filtering**: Screen reads containing partial target region sequences (25bp flanks)
-2. **Bidirectional alignment**: Test both forward and reverse complement orientations
-3. **Sliding window approach**: Variable flank matching (15-50bp) for optimal alignment
-4. **Indel classification**:
-   - **Perfect match**: No editing detected
-   - **Insertion**: Extra sequence at cut site
-   - **Deletion**: Missing sequence at cut site
-
-#### Alignment Scoring
-- **Minimum flank match**: 15bp on each side
-- **Score threshold**: ≥25 matching bases required
-- **Maximum indel size**: 100bp (configurable)
-
-### 3. Analysis Script Features
-
-#### Input Validation
-- File existence and permission checks
-- FASTQ format validation
-- Reference sequence parsing without BioPython dependency
-- File size and content verification
-
-#### Processing Capabilities
-- **Gzipped FASTQ support**: Automatic detection and decompression
-- **Manual parsing**: No external dependencies beyond Python standard library
-- **Progress tracking**: Real-time processing updates
-- **Error handling**: Comprehensive exception management
-
-#### Output Metrics
-- **Total reads processed**: All reads in FASTQ file
-- **Analyzed reads**: Reads containing target region sequences
-- **Coverage**: Percentage of reads analyzed per target
-- **Editing efficiency**: Percentage of analyzed reads with indels
-- **Event breakdown**: Detailed indel size and sequence distribution
-
-### 4. Batch Processing Script
-
+### Special Parameters (TRAC)
 ```bash
-#!/bin/bash
-# Process all sample directories matching pattern *_[12]
-for DIR in *_[12]; do
-    for FASTQ in ${DIR}/*_merged.fastq.gz; do
-        python3 CRISPR_indel_detect.py \
-            "$FASTQ" \
-            genomic_regions_clean.fa \
-            --output "indels_results/${DIR}_${BASENAME}_indels.txt" \
-            --min-quality 20 \
-            --max-indel 100
-    done
-done
+--quantification_window_size 10      # Smaller window for shorter amplicon
+--exclude_bp_from_left 0            # No trimming (shorter sequence)
+--exclude_bp_from_right 0           # No trimming (shorter sequence)
 ```
 
-## Sample Categories Analyzed
+## Step-by-Step Analysis Procedure
 
-### Treatment Groups
-- **Cas9_only**: Cas9 nuclease without ODN
-- **ODN_only**: ODN template without Cas9
-- **Cas9_ODN**: Combined Cas9 + ODN treatment
-- **Cas9_ODN_10pmol**: High concentration ODN treatment
-- **Cas9_ODN_old**: Previous ODN batch
-- **Untreated**: Negative control
-
-### Replicates
-- Each treatment includes biological replicates (_1, _2)
-- Each target gene analyzed separately (AAVS1, CEP290, TRAC)
-
-## Technical Specifications
-
-### Parameters
-- **Minimum quality score**: 20 (configurable)
-- **Maximum indel size**: 100bp
-- **Minimum flank match**: 15bp
-- **Alignment threshold**: 25 matching bases
-- **Search window**: 25bp partial sequence matching
-
-### File Structure
-```
-├── genomic_regions.fa          # Reference sequences with cut site markers
-├── genomic_regions_clean.fa    # Cleaned reference sequences
-├── *_[12]/                     # Sample directories
-│   └── *_merged.fastq.gz       # Merged paired-end reads
-├── indels_results/             # Output directory
-│   └── *_indels.txt           # Analysis results per sample
-└── CRISPR_indel_detect.py     # Main analysis script
+### Step 1: Environment Setup
+```bash
+# Activate the CRISPResso2 conda environment
+eval "$(conda shell.bash hook)"
+conda activate crispresso2
 ```
 
-## Output Format
-
-### Summary Statistics
+### Step 2: Directory Structure Validation
+The script expects the following directory structure:
 ```
-Total reads processed: XXX,XXX
-Reads analyzed (containing target region): XX,XXX
-Analysis coverage: XX.XX%
-Editing efficiency: XX.XX%
-```
-
-### Event Classification
-```
-perfect_match: XXX (XX.XX%)
-del_3bp: XXX (XX.XX%)
-ins_1bp_A: XXX (XX.XX%)
-del_15bp: XXX (XX.XX%)
+project_directory/
+├── run_all_CRISPResso2.sh
+├── Sample1_AAVS1/
+│   └── Sample1_AAVS1_merged.fastq.gz
+├── Sample2_CEP290/
+│   └── Sample2_CEP290_merged.fastq.gz
+└── Sample3_TRAC/
+    └── Sample3_TRAC_merged.fastq.gz
 ```
 
-## Quality Control Considerations
+### Step 3: Gene Detection and Parameter Assignment
+The script automatically:
+1. **Parses directory names** to identify target genes (AAVS1, CEP290, or TRAC)
+2. **Assigns appropriate amplicon sequences** based on gene identity
+3. **Sets gene-specific guide RNA sequences**
+4. **Configures analysis parameters** optimized for each gene
 
-### Strand Orientation
-- CEP290 and TRAC targets on genomic negative strand
-- Algorithm handles both orientations automatically
-- Reference sequences maintained in genomic coordinates
+### Step 4: Quality Control Checks
+Before analysis, the script performs:
+- **File existence verification**: Confirms merged FASTQ files are present
+- **Parameter validation**: Displays amplicon length and guide sequence
+- **Gene identification confirmation**: Shows detected gene for each directory
 
-### Filtering Criteria
-- Minimum alignment score prevents false positives
-- Bidirectional search captures all orientations
-- Quality score filtering removes low-quality reads
-- Size limits focus on biologically relevant indels
+### Step 5: CRISPResso2 Analysis Execution
+For each valid sample, the script runs:
+```bash
+CRISPResso --fastq_r1 INPUT_FILE \
+          --amplicon_seq REFERENCE_SEQUENCE \
+          --guide_seq GUIDE_RNA_SEQUENCE \
+          --output_folder OUTPUT_DIRECTORY \
+          [GENE_SPECIFIC_PARAMETERS]
+```
 
-### Validation Metrics
-- Coverage percentage indicates target capture efficiency
-- Perfect match rate shows baseline editing levels
-- Event distribution reveals repair pathway preferences
+### Step 6: Output Generation
+Each analysis generates:
+- **HTML reports**: Interactive visualization of results
+- **Statistical summaries**: Editing efficiency and indel frequencies
+- **Plots**: Indel size distributions, nucleotide frequency heatmaps
+- **Data tables**: Detailed allele information for downstream analysis
 
----
+## Usage Instructions
 
-This pipeline provides comprehensive quantification of CRISPR-induced indels across multiple targets and experimental conditions, enabling detailed analysis of nuclease activity and repair outcomes.
+### Basic Usage
+```bash
+# Analyze single sample
+./run_all_CRISPResso2.sh Sample1_AAVS1
+
+# Analyze multiple samples
+./run_all_CRISPResso2.sh Sample1_AAVS1 Sample2_CEP290 Sample3_TRAC
+
+# Use wildcards for batch processing
+./run_all_CRISPResso2.sh *_AAVS1 *_CEP290 *_TRAC
+```
+
+### Make Script Executable
+```bash
+chmod +x run_all_CRISPResso2.sh
+```
+
+## Output Structure
+
+### Generated Directories
+For each input sample, the analysis creates:
+```
+{SAMPLE_NAME}_{GENE}_CRISPResso2_analysis/
+├── CRISPResso2_report.html                    # Main interactive report
+├── CRISPResso_quantification_of_editing_frequency.txt
+├── Alleles_frequency_table.txt                # Detailed allele data
+├── Indel_histogram.txt                        # Indel size distribution data
+├── 3a.Indel_size_distribution.pdf            # Indel size plots (-50 to +50 bp)
+└── [Additional plots and analysis files]
+```
+
+### Key Output Files
+
+#### 1. Interactive HTML Report
+- **File**: `CRISPResso2_report.html`
+- **Contents**: Complete analysis summary with interactive plots
+- **Usage**: Open in web browser for comprehensive results review
+
+#### 2. Quantification Summary
+- **File**: `CRISPResso_quantification_of_editing_frequency.txt`
+- **Contents**: Overall editing statistics
+- **Key metrics**: 
+  - Total editing efficiency (%)
+  - Frameshift frequency (%)
+  - In-frame indel frequency (%)
+
+#### 3. Allele Frequency Table
+- **File**: `Alleles_frequency_table.txt`
+- **Contents**: Detailed information for each detected allele
+- **Includes**: Sequence, frequency, indel type, and size
+
+#### 4. Indel Size Distribution
+- **File**: `Indel_histogram.txt`
+- **Contents**: Raw data for indel size plotting
+- **Range**: Extended range (-50 to +50 bp) due to `--plot_histogram_outliers`
+
+## Analysis Interpretation
+
+### Key Metrics to Evaluate
+
+1. **Overall Editing Efficiency**
+   - Target: >10% for successful editing
+   - Calculation: (Reads with indels / Total aligned reads) × 100
+
+2. **Indel Size Distribution**
+   - **Small deletions** (-1 to -10 bp): Most common NHEJ products
+   - **Large deletions** (>-10 bp): Less frequent but significant
+   - **Insertions** (+1 to +10 bp): Typically less frequent than deletions
+
+3. **Cut Site Precision**
+   - Verify indels cluster around expected cut site
+   - Check for off-target cutting patterns
+
+4. **Frameshift Analysis**
+   - Important for knockout experiments
+   - Indels not divisible by 3 cause frameshifts
+
+### Quality Control Indicators
+
+#### Good Results
+- Editing efficiency >10%
+- Clear indel peak around expected cut site
+- Low background in control samples
+- Consistent results across replicates
+
+#### Problematic Results
+- Very low editing efficiency (<2%)
+- Indels distributed randomly across amplicon
+- High background in controls
+- Poor read alignment rates
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+1. **"Quantification window excluded" Error**
+   - **Cause**: Amplicon too short relative to trimming parameters
+   - **Solution**: Adjust `--exclude_bp_from_left/right` parameters (set to 0 for short amplicons)
+
+2. **Low Alignment Rate**
+   - **Cause**: Amplicon sequence doesn't match actual PCR product
+   - **Solution**: Verify amplicon sequence with BLAST alignment
+
+3. **No Indels Detected**
+   - **Cause**: Guide RNA sequence incorrect or experiment failed
+   - **Solution**: Verify guide RNA sequence and check experimental conditions
+
+4. **Memory/Performance Issues**
+   - **Cause**: Large FASTQ files or insufficient resources
+   - **Solution**: Use `--fastq_r1` parameter optimization or increase system resources
+
+## Advanced Options
+
+### HDR Analysis
+If using homology-directed repair (HDR) templates:
+```bash
+--expected_hdr_amplicon_seq HDR_TEMPLATE_SEQUENCE
+```
+
+### Custom Quantification Windows
+For specific analysis requirements:
+```bash
+--quantification_window_coordinates START:END
+```
+
+### Batch Processing Optimization
+For large datasets:
+```bash
+--n_processes 4  # Parallel processing
+--cache_size 1000  # Memory management
+```
+
+## Data Export and Downstream Analysis
+
+### Extracting Summary Statistics
+```bash
+# Combine results from multiple samples
+grep "Total" */CRISPResso_quantification_of_editing_frequency.txt > combined_stats.txt
+```
+
+### Custom Plotting
+Use `Indel_histogram.txt` files for custom visualization:
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load indel data
+df = pd.read_csv('Indel_histogram.txt', sep='\t')
+
+# Create custom plots with extended range (-50 to +50 bp)
+plt.figure(figsize=(12,8))
+plt.bar(df['Size'], df['Percentage'])
+plt.xlim(-50, 50)
+plt.xlabel('Indel Size (bp)')
+plt.ylabel('Frequency (%)')
+plt.title('CRISPR Indel Distribution')
+plt.show()
+```
+
+## Best Practices
+
+1. **Always include control samples** (untreated cells) for background assessment
+2. **Use biological replicates** (minimum n=3) for statistical significance
+3. **Verify amplicon sequences** against reference genome before analysis
+4. **Check FASTQ quality** before running CRISPResso2
+5. **Save analysis parameters** for reproducibility
+6. **Review HTML reports** for comprehensive result interpretation
+
+## References
+
+- CRISPResso2: [https://github.com/pinellolab/CRISPResso2](https://github.com/pinellolab/CRISPResso2)
+- Original publication: Clement et al. Nature Biotechnology (2019)
+- Documentation: [https://crispresso.pinellolab.partners.org/](https://crispresso.pinellolab.partners.org/)
