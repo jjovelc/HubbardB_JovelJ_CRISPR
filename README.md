@@ -1,6 +1,6 @@
 # In this repo, projects from Basil Hubbard's lab are described.
 
-Each project has its own directory and its own README file where details about that project are described. So, please visit those README files.
+The projects are divided by researcher, and then by projects. The master README files list researchers. Inside of each subfolder there are additional md files describing their content. 
 
 ## Group Members and Their Directories:
 
