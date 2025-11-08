@@ -7,7 +7,7 @@
 #SBATCH --mem=48G
 
 ####### Set environment variables ###############
-
+#
 start_time=$(date +%s)
 echo "Job started on: $(date)"
 ####### Run your script #########################
